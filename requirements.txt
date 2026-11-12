@@ -10,3 +10,8 @@ httpx
 psycopg[binary]
 pwdlib[argon2]
 email-validator
+pypdf
+python-docx
+PyMuPDF
+Pillow
+pytesseract

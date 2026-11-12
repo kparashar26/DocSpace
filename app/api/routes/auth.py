@@ -4,7 +4,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
-from app.core.security import decode_access_token, revoke_token
+from app.core.security import revoke_token
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.auth import (
@@ -35,6 +35,7 @@ def register(
 ):
     try:
         return register_user(db, user_data)
+
     except ValueError as error:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -56,6 +57,7 @@ def login(
             email=user_data.email,
             password=user_data.password,
         )
+
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -69,13 +71,10 @@ def logout(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     current_user: User = Depends(get_current_user),
 ):
-    payload = decode_access_token(credentials.credentials)
+    # get_current_user has already validated the token.
+    from app.core.security import decode_access_token
 
-    if not payload or not payload.get("jti") or not payload.get("exp"):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication token",
-        )
+    payload = decode_access_token(credentials.credentials)
 
     revoke_token(
         token_id=payload["jti"],

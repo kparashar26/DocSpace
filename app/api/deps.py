@@ -3,11 +3,14 @@ from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.security import decode_access_token, is_token_revoked
 from app.db.session import get_db
 from app.models.user import User
+from app.models.permission import Permission
+from app.models.role_permission import RolePermission
 
 
 bearer_scheme = HTTPBearer()
@@ -19,7 +22,6 @@ def get_current_user(
 ) -> User:
     token = credentials.credentials
 
-    # Decode and verify the JWT
     payload = decode_access_token(token)
 
     if not payload:
@@ -29,7 +31,6 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Extract token information
     user_id = payload.get("sub")
     token_id = payload.get("jti")
 
@@ -40,7 +41,6 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Check whether the token has been revoked
     if is_token_revoked(token_id):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -48,7 +48,6 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Validate the user ID
     try:
         user_uuid = UUID(user_id)
     except (ValueError, TypeError):
@@ -58,8 +57,11 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Find the user in the database
-    user = db.get(User, user_uuid)
+    user = db.scalar(
+        select(User)
+        .options(joinedload(User.role))
+        .where(User.id == user_uuid)
+    )
 
     if not user:
         raise HTTPException(
@@ -69,3 +71,32 @@ def get_current_user(
         )
 
     return user
+
+
+def require_permission(permission_code: str):
+    def permission_checker(
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db),
+    ) -> User:
+
+        permission = db.scalar(
+            select(Permission.id)
+            .join(
+                RolePermission,
+                RolePermission.permission_id == Permission.id,
+            )
+            .where(
+                RolePermission.role_id == current_user.role_id,
+                Permission.code == permission_code,
+            )
+        )
+
+        if permission is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to perform this action",
+            )
+
+        return current_user
+
+    return permission_checker
