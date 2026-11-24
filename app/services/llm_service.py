@@ -16,14 +16,14 @@ class LLMError(Exception):
 
 class OllamaService:
     """
-    Communicates with the locally running Ollama server.
+    Communicate with the locally running Ollama server.
 
     Ollama handles model execution.
     This service handles HTTP communication and response validation.
     """
 
     def __init__(self):
-        # Read model configuration from application settings.
+        # Load the Ollama connection and model configuration.
         self.base_url = settings.OLLAMA_BASE_URL.rstrip("/")
         self.model = settings.OLLAMA_MODEL
         self.timeout = settings.OLLAMA_TIMEOUT_SECONDS
@@ -35,11 +35,11 @@ class OllamaService:
     ) -> str:
         """Generate a response using the configured Ollama model."""
 
-        # Validate prompts before making an external request.
+        # Validate prompts before sending the request.
         if not system_prompt.strip() or not user_prompt.strip():
             raise ValueError("LLM prompts cannot be empty.")
 
-        # Build the Ollama chat API request.
+        # Prepare the Ollama chat API request.
         payload = {
             "model": self.model,
             "messages": [
@@ -52,34 +52,49 @@ class OllamaService:
                     "content": user_prompt,
                 },
             ],
+
+            # Disable Qwen3 thinking mode to avoid unnecessary reasoning output.
+            "think": False,
+
+            # Return the complete response instead of streaming tokens.
             "stream": False,
+
+            # Configure generation behaviour.
             "options": {
                 "temperature": settings.OLLAMA_TEMPERATURE,
+
+                # Keep the configured context window.
                 "num_ctx": settings.OLLAMA_NUM_CTX,
+
+                # Limit answer length to reduce CPU generation time.
+                "num_predict": 256,
             },
         }
 
         try:
-            # Use a bounded timeout for local model inference.
+            # Send the request to the local Ollama server.
             with httpx.Client(timeout=self.timeout) as client:
                 response = client.post(
                     f"{self.base_url}/api/chat",
                     json=payload,
                 )
 
-                # Convert HTTP errors into a controlled application error.
+                # Raise an error if Ollama returns an unsuccessful status.
                 response.raise_for_status()
 
                 result = response.json()
 
-            # Extract the generated assistant response.
-            answer = result.get("message", {}).get("content")
+            # Extract the assistant's generated response.
+            message = result.get("message", {})
+            answer = message.get("content")
 
+            # Validate the generated answer.
             if not isinstance(answer, str) or not answer.strip():
                 raise LLMError(
                     "Ollama returned an empty or invalid response."
                 )
 
+            # Return the cleaned answer.
             return answer.strip()
 
         except LLMError:
@@ -115,5 +130,5 @@ class OllamaService:
             ) from exc
 
 
-# Create one reusable Ollama service.
+# Create one reusable Ollama service instance.
 ollama_service = OllamaService()
