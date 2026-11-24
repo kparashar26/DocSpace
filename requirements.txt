@@ -15,3 +15,5 @@ python-docx
 PyMuPDF
 Pillow
 pytesseract
+supabase
+qdrant-client

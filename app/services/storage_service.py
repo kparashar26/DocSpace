@@ -1,38 +1,130 @@
 
-from pathlib import Path
+from pathlib import PurePosixPath
 from uuid import uuid4
 
+from app.core.config import settings
+from app.core.supabase import supabase
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-UPLOAD_DIRECTORY = PROJECT_ROOT / "uploads"
+
+class StorageError(Exception):
+    """Raised when a Supabase Storage operation fails."""
 
 
-def save_document_file(file_bytes: bytes, extension: str) -> str:
-    """Save a document using a generated filename."""
+def _validate_storage_key(storage_key: str) -> None:
+    """Validate a document storage path."""
 
-    UPLOAD_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    if not storage_key or "\\" in storage_key:
+        raise ValueError("Invalid storage path.")
+
+    parts = storage_key.split("/")
+    path = PurePosixPath(storage_key)
+
+    if (
+        path.is_absolute()
+        or len(parts) != 2
+        or parts[0] != "uploads"
+        or any(part in {"", ".", ".."} for part in parts)
+    ):
+        raise ValueError("Invalid storage path.")
+
+
+def save_document_file(
+    file_bytes: bytes,
+    extension: str,
+    mime_type: str,
+) -> str:
+    """Upload a document to Supabase Storage."""
 
     storage_filename = f"{uuid4().hex}{extension.lower()}"
-    file_path = UPLOAD_DIRECTORY / storage_filename
+    storage_key = f"uploads/{storage_filename}"
 
-    file_path.write_bytes(file_bytes)
+    try:
+        supabase.storage.from_(
+            settings.SUPABASE_STORAGE_BUCKET
+        ).upload(
+            path=storage_key,
+            file=file_bytes,
+            file_options={
+                "content-type": mime_type,
+            },
+        )
 
-    # Store a relative path in the database.
-    return f"uploads/{storage_filename}"
+    except Exception as exc:
+        raise StorageError(
+            "Failed to upload the document to storage."
+        ) from exc
+
+    return storage_key
+
+
+def download_document_file(storage_key: str) -> bytes:
+    """Download a document from Supabase Storage."""
+
+    _validate_storage_key(storage_key)
+
+    try:
+        return supabase.storage.from_(
+            settings.SUPABASE_STORAGE_BUCKET
+        ).download(storage_key)
+
+    except Exception as exc:
+        raise StorageError(
+            "Failed to download the document from storage."
+        ) from exc
 
 
 def delete_document_file(storage_key: str) -> None:
-    """Delete a stored document safely."""
+    """Delete a document from Supabase Storage."""
 
-    relative_path = Path(storage_key)
+    _validate_storage_key(storage_key)
 
-    if relative_path.is_absolute() or ".." in relative_path.parts:
-        raise ValueError("Invalid storage path.")
+    try:
+        supabase.storage.from_(
+            settings.SUPABASE_STORAGE_BUCKET
+        ).remove([storage_key])
 
-    file_path = (PROJECT_ROOT / relative_path).resolve()
+    except Exception as exc:
+        raise StorageError(
+            "Failed to delete the document from storage."
+        ) from exc
 
-    if not file_path.is_relative_to(UPLOAD_DIRECTORY.resolve()):
-        raise ValueError("Invalid storage path.")
 
-    if file_path.exists() and file_path.is_file():
-        file_path.unlink()
+def create_document_signed_url(
+    storage_key: str,
+    expires_in: int = 300,
+) -> str:
+    """Generate a temporary URL for a private document."""
+
+    _validate_storage_key(storage_key)
+
+    if expires_in <= 0:
+        raise ValueError("URL expiration must be positive.")
+
+    try:
+        response = supabase.storage.from_(
+            settings.SUPABASE_STORAGE_BUCKET
+        ).create_signed_url(
+            storage_key,
+            expires_in,
+        )
+
+        signed_url = (
+            response.get("signedURL")
+            or response.get("signedUrl")
+            or response.get("signed_url")
+        )
+
+        if not signed_url:
+            raise StorageError(
+                "Supabase did not return a signed URL."
+            )
+
+        return signed_url
+
+    except StorageError:
+        raise
+
+    except Exception as exc:
+        raise StorageError(
+            "Failed to generate a document download URL."
+        ) from exc
